@@ -3,9 +3,8 @@ import warnings
 import numpy as np
 import pandas as pd
 from joblib import load
-import mgdiagnose as mgd
 from typing import Iterable
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, MinMaxScaler
 '''This module provides functions for processing and reshaping the raw data into the desired format
 '''
 
@@ -211,6 +210,42 @@ def _data_operations(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     for op in config['data_operations']: df = _config_operation(df, op, config['label_col'])
     return df
 
+def _leave_one_out_mean(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    _df = df.copy()
+    scores = _df[cols].to_numpy()
+    result = scores.copy()
+    mean = np.nanmean(scores, axis=1)
+    for c in range(scores.shape[1]):
+        subset = np.delete(scores, obj=c, axis=1)
+        result[:, c] = scores[:, c] - np.nanmean(subset, axis=1)
+    _df[cols] = result
+    _df['mean'] = mean
+    return _df
+
+
+def _zscore(df: pd.DataFrame, cols: list) -> pd.DataFrame:
+    _df = df.copy()
+    scores = _df[cols].to_numpy()
+    means = np.nanmean(scores, axis=1)
+    stds = np.nanstd(scores, axis=1)
+    stds_safe = np.where(stds == 0, 1, stds)
+    _df[cols] = (scores - means[:, None]) / stds_safe[:, None]
+    _df['mean'] = means
+    _df['std'] = stds
+    return _df
+
+
+def _apply_minmax(df: pd.DataFrame, scaler: MinMaxScaler, columns: list) -> pd.DataFrame:
+    _df = df.copy()
+    X = _df[columns].to_numpy().astype(float)
+    # Apply directly via fitted parameters to preserve NaN values
+    # (avoids sklearn's NaN validation check)
+    lo, hi = scaler.feature_range
+    X_scaled = X * scaler.scale_ + scaler.min_
+    _df[columns] = X_scaled
+    return _df
+
+
 def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     '''Apply all preprocessing steps specified in the config file
 
@@ -252,21 +287,30 @@ def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
 
     if config['target_diseases']: df = select_labels(df, target_col=config['label_col'], labels=config['target_diseases'])
 
-    if config['scale_mean'] == "leave-one-out": 
-        scale_transformer = mgd.pipeline.ScaleMeanTransformer(cols=config['_muscle_columns_processed'])
-        df = scale_transformer.fit_transform(df)
+    if config['scale_mean'] == "leave-one-out":
+        df = _leave_one_out_mean(df, config['_muscle_columns_processed'])
     elif config['scale_mean'] == "z-score":
-        scale_transformer = mgd.pipeline.ZScoreTransformer(cols=config['_muscle_columns_processed'])
-        df = scale_transformer.fit_transform(df)
+        df = _zscore(df, config['_muscle_columns_processed'])
 
     if config['scale_min_max']:
-        if config.get('scale_min_max_path', False): 
-            scaler = load(config['scale_min_max_path'])
+        if config.get('scale_min_max_path', False):
+            _scaler_data = load(config['scale_min_max_path'])
+            # Support both the new (scaler, columns) tuple format and legacy objects
+            if isinstance(_scaler_data, tuple):
+                _scaler, _cols = _scaler_data
+            else:
+                _scaler = _scaler_data
+                _cols = list(getattr(_scaler_data, 'columns',
+                                     getattr(_scaler_data, 'feature_names_in_', None)))
         else:
             feature_range = (-100, 100)
-            _X = df.loc[:, ~df.columns.isin([*config['non_train_cols'], config['label_col']])]
-            scaler = mgd.pipeline.PandasMinMaxScaler(columns=_X.columns, feature_range=feature_range)
-        df = scaler.fit_transform(df)
+            _cols = [c for c in df.columns
+                     if c not in config.get('non_train_cols', [])
+                     and c != config.get('label_col')]
+            _scaler = MinMaxScaler(feature_range=feature_range)
+            _scaler.fit(df[_cols].to_numpy().astype(float))
+        df = _apply_minmax(df, _scaler, _cols)
+        config['_fitted_scaler'] = (_scaler, _cols)
 
     return df
 

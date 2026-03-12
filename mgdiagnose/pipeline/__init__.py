@@ -1,19 +1,33 @@
-from mgdiagnose.pipeline.pipeline import make_pipeline, ScaleMeanTransformer, PandasMinMaxScaler, PandasKNNImputer, RoundSexTransformer, AugmentSMOTENC, AgumentSMOTENC, AugmentSMOTE, get_top_percentile_trials, retrain_top_pipelines, ensemble_predict_proba, ensemble_predict, ensemble_predict_margins, ensemble_shap_values, ZScoreTransformer
+from mgdiagnose.pipeline.pipeline import (
+    make_pipeline,
+    ScaleMeanTransformer,
+    ZScoreTransformer,
+    PandasMinMaxScaler,
+    PandasKNNImputer,
+    RoundSexTransformer,
+    AugmentSMOTENC,
+    AgumentSMOTENC,  # backward-compatible alias
+    AugmentSMOTE,
+    ensemble_predict,
+    ensemble_predict_proba,
+    ensemble_predict_margins,
+    ensemble_preprocess_X,
+    ensemble_shap_values,
+)
 
 __all__ = [
     'make_pipeline',
     'ScaleMeanTransformer',
+    'ZScoreTransformer',
     'PandasMinMaxScaler',
     'PandasKNNImputer',
     'RoundSexTransformer',
     'AugmentSMOTENC',
-    'AgumentSMOTENC',  # backward-compatible alias
+    'AgumentSMOTENC',
     'AugmentSMOTE',
-    'get_top_percentile_trials',
-    'retrain_top_pipelines',
-    'ensemble_predict_proba',
     'ensemble_predict',
+    'ensemble_predict_proba',
     'ensemble_predict_margins',
+    'ensemble_preprocess_X',
     'ensemble_shap_values',
-    'ZScoreTransformer',
 ]

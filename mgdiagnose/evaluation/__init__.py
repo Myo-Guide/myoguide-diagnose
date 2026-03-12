@@ -1,5 +1,13 @@
-from mgdiagnose.evaluation.evaluation import weighted_top_k_accuracy_score
+from mgdiagnose.evaluation.evaluation import (
+    balanced_accuracy_no_warn,
+    balanced_accuracy_scorer,
+    per_class_metrics,
+    weighted_top_k_accuracy_score,
+)
 
 __all__ = [
-    'weighted_top_k_accuracy_score'
+    'balanced_accuracy_no_warn',
+    'balanced_accuracy_scorer',
+    'per_class_metrics',
+    'weighted_top_k_accuracy_score',
 ]

@@ -1,10 +1,8 @@
 import gc
-import shap
 import numbers
 import numpy as np
 import pandas as pd
 from sklearn.svm import SVC
-from sklearn.base import clone
 from xgboost import XGBClassifier
 from sklearn.impute import KNNImputer
 from imblearn.pipeline import Pipeline
@@ -298,33 +296,6 @@ def make_pipeline(classifier_step, X, config, le, sex:bool=True):
     steps.append((classifier_step, classifier))
     return Pipeline(steps)
 
-def get_top_percentile_trials(study, percentile=None, return_idx=False):
-    completed_trial_values = [trial.value for trial in study.trials if trial.value is not None]
-    if not completed_trial_values:
-            raise ValueError("There are no completed trials with values.")
-
-    value_threshold = np.percentile(completed_trial_values, percentile)
-    qualifying_trials = [trial for trial in study.trials if trial.value is not None and trial.value >= value_threshold]
-
-    return qualifying_trials
-
-def retrain_top_pipelines(top_trials, base_pipeline, X_train, y_train):
-    top_pipelines = []
-
-    for i, trial in enumerate(top_trials):
-        print(f'{i+1}/{len(top_trials)}')
-
-        # Clone the base pipeline
-        cloned_pipeline = clone(base_pipeline)
-        # Set hyperparameters from the trial
-        cloned_pipeline.set_params(**trial.params)
-        # Re-train the pipeline on the full training data
-        cloned_pipeline.fit(X_train, y_train)
-        # Store the re-trained pipeline
-        top_pipelines.append(cloned_pipeline)
-
-    return top_pipelines
-
 def ensemble_predict_proba(top_pipelines, X, use_margins=False):
     if use_margins:
         prob_predictions = ensemble_predict_margins(top_pipelines, X)
@@ -347,6 +318,7 @@ def ensemble_predict_margins(top_pipelines, X):
     return margin_outputs
 
 def ensemble_shap_values(top_pipelines, X_test, y_test, sex:bool=True):
+    import shap
     n = len(top_pipelines)
     shap_values_mean = None
     interaction_values_mean = None
@@ -374,3 +346,29 @@ def softmax(x):
     """Compute softmax values for each sets of scores in x."""
     e_x = np.exp(x - np.max(x, axis=1, keepdims=True))
     return e_x / e_x.sum(axis=1, keepdims=True)
+
+def ensemble_preprocess_X(top_pipelines, X, sex: bool = True) -> pd.DataFrame:
+    """Apply the pre-classification steps (imputer, optional sex_rounder) of each
+    ensemble member to X and return the member-averaged result as a DataFrame.
+
+    Parameters
+    ----------
+    top_pipelines : list
+        Fitted ensemble pipelines.
+    X : pd.DataFrame
+        Raw feature matrix.
+    sex : bool
+        Whether a sex_rounder step is present in the pipelines.
+
+    Returns
+    -------
+    pd.DataFrame
+        Member-averaged preprocessed feature matrix with the original column names.
+    """
+    processed = []
+    for pipeline in top_pipelines:
+        X_proc = pipeline['imputer'].transform(X.copy())
+        if sex:
+            X_proc = pipeline['sex_rounder'].transform(X_proc)
+        processed.append(X_proc.to_numpy())
+    return pd.DataFrame(np.mean(np.array(processed), axis=0), columns=X.columns)
