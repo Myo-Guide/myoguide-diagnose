@@ -222,7 +222,6 @@ def _leave_one_out_mean(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     _df['mean'] = mean
     return _df
 
-
 def _zscore(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     _df = df.copy()
     scores = _df[cols].to_numpy()
@@ -234,7 +233,6 @@ def _zscore(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     _df['std'] = stds
     return _df
 
-
 def _apply_minmax(df: pd.DataFrame, scaler: MinMaxScaler, columns: list) -> pd.DataFrame:
     _df = df.copy()
     X = _df[columns].to_numpy().astype(float)
@@ -244,7 +242,6 @@ def _apply_minmax(df: pd.DataFrame, scaler: MinMaxScaler, columns: list) -> pd.D
     X_scaled = X * scaler.scale_ + scaler.min_
     _df[columns] = X_scaled
     return _df
-
 
 def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     '''Apply all preprocessing steps specified in the config file
@@ -263,25 +260,28 @@ def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     df = _data_operations(df, config)
     config['_muscle_columns_processed'] = list(filter(lambda c: c in config['muscles'], list(df.columns)))
 
+    if config['scale_scores'] is not None:
+        # Rescale all muscle scores to a common range before asymmetry is computed,
+        # so that quantitative (0-100) and semiquantitative (0-4) scores produce
+        # comparable asymmetry values. bilateral_to_mean has not run yet at this
+        # point, so _l/_r columns are always present.
+        df = scale_scores(
+            df, scale_col='scale',
+            cols=config['_muscle_columns_processed'],
+            t_min=config['scale_scores'][0], t_max=config['scale_scores'][1],
+            bilateral_scores=True,
+        )
+
     if config['asymmetry']: df = asymmetry(df, cols=config['_muscle_columns_processed'])
     if config['bilateral_to_mean']: df = bilateral_to_mean(df, cols=config['_muscle_columns_processed'])
 
-    if config['remove_unscored']: 
+    if config['remove_unscored']:
         if isinstance(config['remove_unscored'], float):
             df = remove_unscored(df, cols=config['_muscle_columns_processed'], thresh=config['remove_unscored'])
         elif isinstance(config['remove_unscored'], bool):
             df = remove_unscored(df, cols=config['_muscle_columns_processed'])
         else:
             raise Exception('Unexpected type')
-        
-    if config['scale_scores'] is not None:
-        # A column named `scale` is expected in the dataframe
-        df = scale_scores(
-            df, scale_col='scale',
-            cols=config['_muscle_columns_processed'],
-            t_min=config['scale_scores'][0], t_max=config['scale_scores'][1],
-            bilateral_scores= not config['bilateral_to_mean']
-        )
 
     if config['filter_status']: df = filter_status(df, include=config['filter_status'])
 
