@@ -263,8 +263,7 @@ def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     if config['scale_scores'] is not None:
         # Rescale all muscle scores to a common range before asymmetry is computed,
         # so that quantitative (0-100) and semiquantitative (0-4) scores produce
-        # comparable asymmetry values. bilateral_to_mean has not run yet at this
-        # point, so _l/_r columns are always present.
+        # comparable asymmetry values.
         df = scale_scores(
             df, scale_col='scale',
             cols=config['_muscle_columns_processed'],
@@ -291,6 +290,8 @@ def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
         df = _leave_one_out_mean(df, config['_muscle_columns_processed'])
     elif config['scale_mean'] == "z-score":
         df = _zscore(df, config['_muscle_columns_processed'])
+    elif config['scale_mean'] == "none":
+        df["mean"] = np.nanmean(df[config['_muscle_columns_processed']].to_numpy(), axis=1)
 
     if config['scale_min_max']:
         if config.get('scale_min_max_path', False):
@@ -530,6 +531,7 @@ def scale_scores(df:pd.DataFrame, scale_col:str, t_min, t_max, cols:Iterable[str
         _cols = []
         for c in _cols_copy:
             if not c == "tongue":
+                _cols.append(c)
                 _cols.append(f'{c}_l')
                 _cols.append(f'{c}_r')
             else:
@@ -563,6 +565,8 @@ def scale_scores(df:pd.DataFrame, scale_col:str, t_min, t_max, cols:Iterable[str
             return 0
         elif x == 'FF':
             return 0
+        else:
+            raise ValueError(f"Invalid scale: {x}")
         
     def _scale_denominator(x):
         # returns o_max - o_min
@@ -578,6 +582,8 @@ def scale_scores(df:pd.DataFrame, scale_col:str, t_min, t_max, cols:Iterable[str
             return 4
         elif x == 'FF':
             return 100
+        else:
+            raise ValueError(f"Invalid scale: {x}")
 
     scale_omin = np.array(list(map(_scale_omin, scale)))
     scale_denominator = np.array(list(map(_scale_denominator, scale)))

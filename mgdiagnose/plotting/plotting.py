@@ -177,16 +177,17 @@ def heatmap(
     df:pd.DataFrame,
     target:str,
     config:dict,
-    figsize=None,
+    figsize:tuple=None,
     save:bool=False,
     show_asymmetry:bool=True,
     show_age:bool=True,
     show_sex:bool=True,
     font_size:int=14,
-    show_y_labels=False,
+    show_y_labels:bool=False,
     subset_by:tuple=None,
-    age_vrange:tuple=None,
-    score_range=(-100, 100),
+    age_vrange:tuple=(None, None),
+    asym_vrange:tuple=(None, None),
+    score_vrange:tuple=(None, None),
 ):
     '''Plots a heatmap of the data.
 
@@ -232,7 +233,7 @@ def heatmap(
 
     scores = _df[config['_muscle_columns_processed']].copy()
     if figsize is None:
-        figsize = 1.
+        figsize = None
     elif isinstance(figsize, (float, int)) :
         r = int(0.3 * (len(config['_muscle_columns_processed']) + 10))
         c = int(0.05 * scores.shape[0] * figsize)
@@ -264,7 +265,7 @@ def heatmap(
 
     # SCORE #
     ax = axs[1]
-    sns.heatmap(scores, ax=ax, cmap=score_cmap, vmin=score_range[0], vmax=score_range[1], center=0, cbar=False)
+    sns.heatmap(scores, ax=ax, cmap=score_cmap, vmin=score_vrange[0], vmax=score_vrange[1], center=0, cbar=False)
     ax.tick_params(axis='x', rotation=90)
     ax.set_yticks([])
 
@@ -272,7 +273,7 @@ def heatmap(
     if show_asymmetry:
         ax = axs[2]
         asymm = _df[['asymm_mean', 'asymm_std']].copy()
-        sns.heatmap(asymm, ax=ax, cmap='plasma', vmin=0, vmax=100, cbar=False)
+        sns.heatmap(asymm, ax=ax, cmap='plasma', vmin=asym_vrange[0], vmax=asym_vrange[1], cbar=False)
         ax.tick_params(axis='x', rotation=90)
         ax.set_yticks([])
         ax.set_xticks([0.5, 1.5])
@@ -282,10 +283,7 @@ def heatmap(
     if show_age:
         age = _df[['age']].copy()
         ax = axs[3]
-        if age_vrange is None:
-            sns.heatmap(age, ax=ax, cmap='jet', cbar=False)
-        else:
-            sns.heatmap(age, ax=ax, cmap='jet', cbar=False, vmin=age_vrange[0], vmax=age_vrange[1])
+        sns.heatmap(age, ax=ax, cmap='jet', cbar=False, vmin=age_vrange[0], vmax=age_vrange[1])
         ax.tick_params(axis='x', rotation=90)
         ax.set_yticks([])
 
