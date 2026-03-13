@@ -7,7 +7,7 @@ from xgboost import XGBClassifier
 from sklearn.impute import KNNImputer
 from imblearn.pipeline import Pipeline
 from imblearn.utils import check_target_type
-from sklearn.preprocessing import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler, StandardScaler
 from imblearn.over_sampling import SMOTENC, SMOTE
 from sklearn.neighbors import KNeighborsClassifier
 from sklearn.ensemble import RandomForestClassifier
@@ -26,6 +26,31 @@ class PandasMinMaxScaler(MinMaxScaler):
         _X = super().transform(X[self.columns])
         X[self.columns] = _X
         return X
+
+class PandasStandardScaler(BaseEstimator, TransformerMixin):
+    """NaN-aware column-wise z-score scaler for pandas DataFrames.
+
+    Fits using nanmean/nanstd so missing values are ignored during fit.
+    Transform applies the formula directly, leaving NaN values as NaN,
+    which allows the scaler to run before KNN imputation.
+    """
+
+    def __init__(self, columns):
+        self.columns = columns
+
+    def fit(self, X, y=None):
+        data = X[self.columns].to_numpy().astype(float)
+        self.mean_ = np.nanmean(data, axis=0)
+        self.scale_ = np.nanstd(data, axis=0)
+        # Avoid division by zero for constant columns
+        self.scale_ = np.where(self.scale_ == 0, 1.0, self.scale_)
+        return self
+
+    def transform(self, X, y=None):
+        _X = X.copy()
+        data = _X[self.columns].to_numpy().astype(float)
+        _X[self.columns] = (data - self.mean_) / self.scale_
+        return _X
 
 class PandasKNNImputer(KNNImputer):
     def __init__(self, columns, keep_empty_features=False, n_neighbors=5, weights='uniform'):
@@ -270,6 +295,7 @@ def make_pipeline(classifier_step, X, config, le, sex:bool=True):
     feature_range=(-100, 100)
 
     imputer = PandasKNNImputer(columns=X.columns, keep_empty_features=True)
+    scaler = PandasStandardScaler(columns=list(X.columns))
     sex_rounder = RoundSexTransformer(split_val=0, range=feature_range)
     if sex:
         oversampler = AugmentSMOTENC(categorical_features=['patient__sex'], random_state=config['seed'])
@@ -290,6 +316,7 @@ def make_pipeline(classifier_step, X, config, le, sex:bool=True):
     else: raise Exception(f'Unexpected classifier: {classifier_step}')
 
     steps = []
+    steps.append(('scaler', scaler))
     steps.append(('imputer', imputer))
     if sex: steps.append(('sex_rounder', sex_rounder))
     steps.append(('oversampler', oversampler))
@@ -326,6 +353,7 @@ def ensemble_shap_values(top_pipelines, X_test, y_test, sex:bool=True):
     for i, pipeline in enumerate(top_pipelines):
         print(f'######### Shaps {i+1}/{n} #########')
         X_test_processed = X_test.copy()
+        X_test_processed = pipeline['scaler'].transform(X_test_processed)
         X_test_processed = pipeline['imputer'].transform(X_test_processed)
         if sex: X_test_processed = pipeline['sex_rounder'].transform(X_test_processed)
 
@@ -367,7 +395,8 @@ def ensemble_preprocess_X(top_pipelines, X, sex: bool = True) -> pd.DataFrame:
     """
     processed = []
     for pipeline in top_pipelines:
-        X_proc = pipeline['imputer'].transform(X.copy())
+        X_proc = pipeline['scaler'].transform(X.copy())
+        X_proc = pipeline['imputer'].transform(X_proc)
         if sex:
             X_proc = pipeline['sex_rounder'].transform(X_proc)
         processed.append(X_proc.to_numpy())

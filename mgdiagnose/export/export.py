@@ -6,7 +6,7 @@ import importlib
 import numpy as np
 import pandas as pd
 from sklearn.impute import KNNImputer
-from sklearn.preprocessing import MinMaxScaler, LabelEncoder
+from sklearn.preprocessing import LabelEncoder
 
 import mgdiagnose.process.process as _process_file
 
@@ -32,14 +32,11 @@ class ModelBundle:
         Fitted label encoder; use ``bundle.classes_`` for the class names.
     '''
 
-    def __init__(self, config, le, scaler, scaler_columns,
-                 ensemble, sex, feature_names, process_source, runtime):
+    def __init__(self, config, le, ensemble, sex, feature_names, process_source, runtime):
         self.config = config
         self.le = le
         self.runtime = runtime                  # dict of package versions at export time
-        self._scaler = scaler                   # fitted sklearn MinMaxScaler or None
-        self._scaler_columns = scaler_columns   # list[str]
-        self._ensemble = ensemble               # list[dict]
+        self._ensemble = ensemble               # list[dict], each has scaler_mean/scale arrays
         self._sex = sex
         self._feature_names = list(feature_names)
         self._process_source = process_source   # captured source of process.py
@@ -62,7 +59,9 @@ class ModelBundle:
         X = self._prepare_X(df)
         probs = []
         for member in self._ensemble:
-            X_imp = member['imputer'].transform(X)
+            # Scale first (NaN-preserving) then impute
+            X_scaled = (X - member['scaler_mean']) / member['scaler_scale']
+            X_imp = member['imputer'].transform(X_scaled)
             if member['sex_params']:
                 sp = member['sex_params']
                 idx = self._feature_names.index('patient__sex')
@@ -143,17 +142,7 @@ class ModelBundle:
 
     def _preprocess(self, df: pd.DataFrame) -> pd.DataFrame:
         ns = self._get_process_ns()
-        # Disable scale_min_max so the embedded source never needs PandasMinMaxScaler;
-        # the scaler is applied separately below via stored numpy parameters.
-        _config = {**self.config, 'scale_min_max': False}
-        df = ns['process_data'](df, _config)
-        if self._scaler is not None:
-            X = df[self._scaler_columns].to_numpy().astype(float)
-            # Apply via raw parameters to preserve NaN (skips sklearn NaN validation)
-            X_scaled = X * self._scaler.scale_ + self._scaler.min_
-            df = df.copy()
-            df[self._scaler_columns] = X_scaled
-        return df
+        return ns['process_data'](df, self.config)
 
     def _prepare_X(self, df: pd.DataFrame) -> np.ndarray:
         df_proc = self._preprocess(df)
@@ -203,17 +192,16 @@ def _convert_imputer(mgd_imputer) -> KNNImputer:
     return std
 
 
-def _convert_scaler(pandas_minmax_scaler) -> tuple:
-    '''Convert a legacy PandasMinMaxScaler to (MinMaxScaler, column list).
+def _convert_standard_scaler(pandas_std_scaler) -> dict:
+    '''Extract the fitted parameters of a PandasStandardScaler as plain numpy arrays.
 
-    Only needed for bundles exported before the process.py migration.
+    Storing raw arrays rather than a sklearn object means the bundle has no
+    mgdiagnose dependency and sidesteps sklearn's NaN validation on transform.
     '''
-    std = MinMaxScaler(feature_range=pandas_minmax_scaler.feature_range)
-    skip = {'columns', 'feature_range'}
-    for key, val in pandas_minmax_scaler.__dict__.items():
-        if key not in skip:
-            setattr(std, key, val.copy() if hasattr(val, 'copy') else val)
-    return std, list(pandas_minmax_scaler.columns)
+    return {
+        'mean': pandas_std_scaler.mean_.copy(),
+        'scale': pandas_std_scaler.scale_.copy(),
+    }
 
 
 # ── Public functions ──────────────────────────────────────────────────────────
@@ -239,19 +227,10 @@ def export_model(ensemble_pipelines, config, le, feature_names, sex=True) -> Mod
     -------
     ModelBundle
     '''
-    # ── Scaler ────────────────────────────────────────────────────────────────
-    scaler_entry = config.get('_fitted_scaler')
-    if scaler_entry is not None:
-        if isinstance(scaler_entry, tuple):
-            std_scaler, scaler_columns = scaler_entry   # new (MinMaxScaler, cols) format
-        else:
-            std_scaler, scaler_columns = _convert_scaler(scaler_entry)  # legacy
-    else:
-        std_scaler, scaler_columns = None, []
-
     # ── Inference-only ensemble ───────────────────────────────────────────────
     ensemble_members = []
     for pipe in ensemble_pipelines:
+        scaler_params = _convert_standard_scaler(pipe['scaler'])
         std_imputer = _convert_imputer(pipe['imputer'])
         sex_params = None
         if sex:
@@ -259,9 +238,11 @@ def export_model(ensemble_pipelines, config, le, feature_names, sex=True) -> Mod
             sex_params = {'split_val': sr.split_val, 'range': sr.range}
         _, classifier = pipe.steps[-1]   # classifier is always the last step
         ensemble_members.append({
-            'imputer':    std_imputer,
-            'sex_params': sex_params,
-            'classifier': classifier,
+            'scaler_mean':  scaler_params['mean'],
+            'scaler_scale': scaler_params['scale'],
+            'imputer':      std_imputer,
+            'sex_params':   sex_params,
+            'classifier':   classifier,
         })
 
     # ── Embed process.py source ───────────────────────────────────────────────
@@ -276,8 +257,6 @@ def export_model(ensemble_pipelines, config, le, feature_names, sex=True) -> Mod
     return ModelBundle(
         config=export_config,
         le=le,
-        scaler=std_scaler,
-        scaler_columns=scaler_columns,
         ensemble=ensemble_members,
         sex=sex,
         feature_names=list(feature_names),

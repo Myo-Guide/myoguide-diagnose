@@ -2,9 +2,8 @@ import os
 import warnings
 import numpy as np
 import pandas as pd
-from joblib import load
 from typing import Iterable
-from sklearn.preprocessing import LabelEncoder, MinMaxScaler
+from sklearn.preprocessing import LabelEncoder
 '''This module provides functions for processing and reshaping the raw data into the desired format
 '''
 
@@ -233,15 +232,6 @@ def _zscore(df: pd.DataFrame, cols: list) -> pd.DataFrame:
     _df['std'] = stds
     return _df
 
-def _apply_minmax(df: pd.DataFrame, scaler: MinMaxScaler, columns: list) -> pd.DataFrame:
-    _df = df.copy()
-    X = _df[columns].to_numpy().astype(float)
-    # Apply directly via fitted parameters to preserve NaN values
-    # (avoids sklearn's NaN validation check)
-    lo, hi = scaler.feature_range
-    X_scaled = X * scaler.scale_ + scaler.min_
-    _df[columns] = X_scaled
-    return _df
 
 def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     '''Apply all preprocessing steps specified in the config file
@@ -292,26 +282,6 @@ def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
         df = _zscore(df, config['_muscle_columns_processed'])
     elif config['scale_mean'] == "none":
         df["mean"] = np.nanmean(df[config['_muscle_columns_processed']].to_numpy(), axis=1)
-
-    if config['scale_min_max']:
-        if config.get('scale_min_max_path', False):
-            _scaler_data = load(config['scale_min_max_path'])
-            # Support both the new (scaler, columns) tuple format and legacy objects
-            if isinstance(_scaler_data, tuple):
-                _scaler, _cols = _scaler_data
-            else:
-                _scaler = _scaler_data
-                _cols = list(getattr(_scaler_data, 'columns',
-                                     getattr(_scaler_data, 'feature_names_in_', None)))
-        else:
-            feature_range = (-100, 100)
-            _cols = [c for c in df.columns
-                     if c not in config.get('non_train_cols', [])
-                     and c != config.get('label_col')]
-            _scaler = MinMaxScaler(feature_range=feature_range)
-            _scaler.fit(df[_cols].to_numpy().astype(float))
-        df = _apply_minmax(df, _scaler, _cols)
-        config['_fitted_scaler'] = (_scaler, _cols)
 
     return df
 

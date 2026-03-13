@@ -15,7 +15,6 @@ _REQUIRED_KEYS = [
     'filter_status',
     'target_diseases',
     'scale_mean',
-    'scale_min_max',
 ]
 
 _VALID_SCALE_MEAN = {'leave-one-out', 'z-score', 'none'}
@@ -156,17 +155,6 @@ def validate_config(config: dict) -> None:
             f'got: {sm!r}'
         )
 
-    # --- scale_min_max --------------------------------------------------------
-    if not isinstance(config['scale_min_max'], bool):
-        _err(f'`scale_min_max` must be a boolean, got: {config["scale_min_max"]!r}')
-
-    # --- scale_min_max_path (optional) ----------------------------------------
-    if config.get('scale_min_max_path') is not None:
-        if not isinstance(config['scale_min_max_path'], str):
-            _err(
-                f'`scale_min_max_path` must be a string, '
-                f'got: {config["scale_min_max_path"]!r}'
-            )
 
 
 def load_config(config_file):
