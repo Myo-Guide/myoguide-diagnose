@@ -304,3 +304,31 @@ def load_model(path: str) -> ModelBundle:
     '''
     with open(path, 'rb') as f:
         return pickle.load(f)
+
+
+def reexport_model(old_path: str, new_path: str) -> ModelBundle:
+    '''Re-save a bundle that was exported with plain pickle using cloudpickle.
+
+    Use this to migrate an existing bundle so that mgdiagnose is no longer
+    required at load time — without retraining.
+
+    Requires mgdiagnose to be installed in the current environment (needed to
+    unpickle the old bundle), but the resulting file at ``new_path`` can be
+    loaded with ``load_model()`` anywhere, without mgdiagnose.
+
+    Parameters
+    ----------
+    old_path : str
+        Path to the bundle saved with plain pickle.
+    new_path : str
+        Destination path for the cloudpickle bundle.
+
+    Returns
+    -------
+    ModelBundle
+        The loaded (and re-saved) bundle.
+    '''
+    with open(old_path, 'rb') as f:
+        bundle = pickle.load(f)
+    save_model(bundle, new_path)
+    return bundle

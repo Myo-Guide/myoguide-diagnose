@@ -3,6 +3,7 @@ from mgdiagnose.export.export import (
     export_model,
     save_model,
     load_model,
+    reexport_model,
 )
 
 __all__ = [
@@ -10,4 +11,5 @@ __all__ = [
     'export_model',
     'save_model',
     'load_model',
+    'reexport_model',
 ]
