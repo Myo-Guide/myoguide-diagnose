@@ -264,17 +264,20 @@ def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     if config['asymmetry']: df = asymmetry(df, cols=config['_muscle_columns_processed'])
     if config['bilateral_to_mean']: df = bilateral_to_mean(df, cols=config['_muscle_columns_processed'])
 
-    if config['remove_unscored']:
-        if isinstance(config['remove_unscored'], float):
-            df = remove_unscored(df, cols=config['_muscle_columns_processed'], thresh=config['remove_unscored'])
-        elif isinstance(config['remove_unscored'], bool):
-            df = remove_unscored(df, cols=config['_muscle_columns_processed'])
-        else:
-            raise Exception('Unexpected type')
+    if not config.get('inference_mode', False):
+        if config['remove_unscored']:
+            if isinstance(config['remove_unscored'], float):
+                df = remove_unscored(df, cols=config['_muscle_columns_processed'], thresh=config['remove_unscored'])
+            elif isinstance(config['remove_unscored'], bool):
+                df = remove_unscored(df, cols=config['_muscle_columns_processed'])
+            else:
+                raise Exception('Unexpected type')
 
-    if config['filter_status']: df = filter_status(df, include=config['filter_status'])
+    if not config.get('inference_mode', False):
+        if config['filter_status']: df = filter_status(df, include=config['filter_status'])
 
-    if config['target_diseases']: df = select_labels(df, target_col=config['label_col'], labels=config['target_diseases'])
+    if not config.get('inference_mode', False):
+        if config['target_diseases']: df = select_labels(df, target_col=config['label_col'], labels=config['target_diseases'])
 
     if config['scale_mean'] == "leave-one-out":
         df = _leave_one_out_mean(df, config['_muscle_columns_processed'])
@@ -283,7 +286,31 @@ def process_data(df:pd.DataFrame, config:dict) -> pd.DataFrame:
     elif config['scale_mean'] == "none":
         df["mean"] = np.nanmean(df[config['_muscle_columns_processed']].to_numpy(), axis=1)
 
+    if config.get('missing_matrix', False):
+        # Applied after row filtering so the samples match the fat-score experiment exactly.
+        # Every feature column becomes a flag; exclude one (e.g. age) via `non_train_cols`.
+        cols = [c for c in df.columns if c not in [*config['non_train_cols'], config['label_col']]]
+        df = missing_matrix(df, cols=cols)
+
     return df
+
+def missing_matrix(df:pd.DataFrame, cols:Iterable[str]) -> pd.DataFrame:
+    '''Replaces the muscle fat scores with their availability mask: 1 if scored, 0 if missing.
+
+    Parameters
+    ----------
+    df
+        Input DataFrame
+    cols
+        Columns to replace
+
+    Returns
+    -------
+        DataFrame with the selected columns as 0/1 availability flags
+    '''
+    _df = df.copy()
+    _df[cols] = _df[cols].notna().astype(int)
+    return _df
 
 def prepare_data(df:pd.DataFrame, config:dict) -> tuple[pd.DataFrame, np.ndarray, LabelEncoder, np.ndarray]:
     '''Selects the trainable columns and separates the features and labels. Labels are encoded using scikit-learn LabelEncoder.
@@ -573,7 +600,7 @@ def select_labels(df:pd.DataFrame, target_col:str, labels:Iterable[str]) -> pd.D
     found_targets = list(_df[target_col].unique())
     for l in labels:
         if l not in found_targets:
-            raise Exception(f'Label `{l}` not found in DataFrame')
+            print(f'Label `{l}` not found in DataFrame')
 
     _df = _df.loc[_df[target_col].isin(labels)].copy()
     return _df.copy()

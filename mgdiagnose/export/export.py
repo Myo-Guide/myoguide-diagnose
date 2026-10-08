@@ -57,22 +57,97 @@ class ModelBundle:
         np.ndarray of shape (n_samples, n_classes)
         '''
         X = self._prepare_X(df)
-        probs = []
-        for member in self._ensemble:
-            # Scale first (NaN-preserving) then impute
-            X_scaled = (X - member['scaler_mean']) / member['scaler_scale']
-            X_imp = member['imputer'].transform(X_scaled)
-            if member['sex_params']:
-                sp = member['sex_params']
-                idx = self._feature_names.index('patient__sex')
-                X_imp = X_imp.copy()
-                X_imp[:, idx] = np.where(
-                    X_imp[:, idx] <= sp['split_val'],
-                    sp['range'][0],
-                    sp['range'][1],
-                )
-            probs.append(member['classifier'].predict_proba(X_imp))
+        probs = [
+            member['classifier'].predict_proba(self._member_input(X, member))
+            for member in self._ensemble
+        ]
         return np.mean(probs, axis=0)
+
+    def shap_values(self, df: pd.DataFrame) -> tuple:
+        '''Return TreeSHAP values explaining the ensemble's prediction.
+
+        The contributions are computed on **each member's own transformed
+        input** — the same array that member's classifier scores in
+        predict_proba (standardised, KNN-imputed, sex-snapped). Explaining the
+        un-imputed feature matrix instead attributes the prediction to a point
+        the model never scored, which silently decouples the explanation from
+        the ranking.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Raw input data in the same format as training data.
+
+        Returns
+        -------
+        shaps : np.ndarray of shape (n_samples, n_features, n_classes)
+        base_values : np.ndarray of shape (n_classes,)
+
+        Notes
+        -----
+        ``base_values[c] + shaps[i, :, c].sum()`` is the ensemble-mean **raw
+        margin** (log-odds) for class ``c``, not a probability. It is not
+        directly comparable to ``predict_proba``, which averages probabilities
+        rather than margins; the two agree on ranking but not on scale.
+        '''
+        out = self.explain(df, show_shap=True)
+        return out['shaps'], out['base_values']
+
+    def explain(self, df: pd.DataFrame, show_shap: bool = True) -> dict:
+        '''Predict and (optionally) explain in a single pass over the ensemble.
+
+        Probabilities and SHAP contributions are derived from the same
+        per-member arrays, so the explanation cannot drift from the prediction.
+        This is also cheaper than calling predict_proba() and shap_values()
+        separately, which would transform the input through every member twice.
+
+        Parameters
+        ----------
+        df : pd.DataFrame
+            Raw input data in the same format as training data.
+        show_shap : bool
+            Compute SHAP contributions. Roughly triples the cost.
+
+        Returns
+        -------
+        dict with keys:
+            'probs'         (n_samples, n_classes)
+            'feature_names' list[str]
+            'X'             (n_samples, n_features) preprocessed, pre-imputation
+            'shaps'         (n_samples, n_features, n_classes)  — if show_shap
+            'base_values'   (n_classes,)                        — if show_shap
+        '''
+        X = self._prepare_X(df)
+        feature_names = list(self._feature_names)
+
+        dmatrix = None
+        if show_shap:
+            import xgboost as xgb  # only needed on the SHAP path
+            dmatrix = xgb.DMatrix
+
+        probs = []
+        contribs_sum = None
+        for member in self._ensemble:
+            X_member = self._member_input(X, member)
+            probs.append(member['classifier'].predict_proba(X_member))
+            if show_shap:
+                # (n_samples, n_classes, n_features + 1); last column is the base value
+                contribs = member['classifier'].get_booster().predict(
+                    dmatrix(X_member, feature_names=feature_names),
+                    pred_contribs=True,
+                )
+                contribs_sum = contribs if contribs_sum is None else contribs_sum + contribs
+
+        out = {
+            'probs': np.mean(probs, axis=0),
+            'feature_names': feature_names,
+            'X': X,
+        }
+        if show_shap:
+            contribs_mean = contribs_sum / len(self._ensemble)
+            out['shaps'] = np.moveaxis(contribs_mean[:, :, :-1], 1, -1)
+            out['base_values'] = contribs_mean[0, :, -1]
+        return out
 
     def predict(self, df: pd.DataFrame) -> np.ndarray:
         '''Preprocess raw data and return the most likely class labels.
@@ -146,7 +221,38 @@ class ModelBundle:
 
     def _prepare_X(self, df: pd.DataFrame) -> np.ndarray:
         df_proc = self._preprocess(df)
-        return df_proc[[c for c in self._feature_names if c in df_proc.columns]].to_numpy()
+        missing = [c for c in self._feature_names if c not in df_proc.columns]
+        if missing:
+            # Silently dropping columns would shift every downstream feature by
+            # one position, misaligning scaler/imputer parameters and any
+            # feature-name mapping built by enumerate(self._feature_names).
+            raise ValueError(
+                f'Preprocessed data is missing {len(missing)} expected feature '
+                f'column(s): {missing}'
+            )
+        return df_proc[list(self._feature_names)].to_numpy()
+
+    def _member_input(self, X: np.ndarray, member: dict) -> np.ndarray:
+        '''Transform the preprocessed feature matrix into one member's input space.
+
+        Scale first (NaN-preserving), then impute, then snap sex to its trained
+        two-point range. This is the single definition of what an ensemble
+        member actually sees; predict_proba() and explain() both go through it
+        so a prediction and its explanation can never be computed on different
+        arrays.
+        '''
+        X_member = (X - member['scaler_mean']) / member['scaler_scale']
+        X_member = member['imputer'].transform(X_member)
+        if member['sex_params']:
+            sp = member['sex_params']
+            idx = self._feature_names.index('patient__sex')
+            X_member = X_member.copy()
+            X_member[:, idx] = np.where(
+                X_member[:, idx] <= sp['split_val'],
+                sp['range'][0],
+                sp['range'][1],
+            )
+        return X_member
 
 
 # ── Runtime capture ──────────────────────────────────────────────────────────
@@ -285,6 +391,11 @@ def save_model(bundle: ModelBundle, path: str) -> None:
             'cloudpickle is required for save_model(). '
             'Install it with: pip install cloudpickle'
         ) from exc
+    import sys
+    # Embed the ModelBundle class definition inline rather than storing a
+    # module reference.  Without this, loading the bundle on a machine that
+    # does not have mgdiagnose installed raises ModuleNotFoundError.
+    cloudpickle.register_pickle_by_value(sys.modules[__name__])
     with open(path, 'wb') as f:
         cloudpickle.dump(bundle, f)
 
@@ -306,11 +417,16 @@ def load_model(path: str) -> ModelBundle:
         return pickle.load(f)
 
 
-def reexport_model(old_path: str, new_path: str) -> ModelBundle:
-    '''Re-save a bundle that was exported with plain pickle using cloudpickle.
+def reexport_model(old_path: str, new_path: str, inference_mode: bool = False,
+                   refresh_class: bool = True) -> ModelBundle:
+    '''Re-save a bundle, optionally switching it to inference mode.
 
     Use this to migrate an existing bundle so that mgdiagnose is no longer
-    required at load time — without retraining.
+    required at load time — without retraining.  When ``inference_mode=True``
+    the bundle's config is updated and its embedded process.py source is
+    refreshed from the currently installed mgdiagnose package, so that the
+    training-only steps (filter_status, select_labels, remove_unscored) are
+    skipped during inference.
 
     Requires mgdiagnose to be installed in the current environment (needed to
     unpickle the old bundle), but the resulting file at ``new_path`` can be
@@ -322,6 +438,16 @@ def reexport_model(old_path: str, new_path: str) -> ModelBundle:
         Path to the bundle saved with plain pickle.
     new_path : str
         Destination path for the cloudpickle bundle.
+    inference_mode : bool
+        If True, set ``config['inference_mode'] = True`` in the bundle and
+        refresh the embedded process.py source from the current installation.
+        Default is False (behaviour identical to the original reexport_model).
+    refresh_class : bool
+        Rebind the loaded bundle to the ModelBundle class defined in *this*
+        module before re-saving, so the new file carries the current methods.
+        Without this the old class definition — which cloudpickle embedded by
+        value in the source file — is simply round-tripped, and fixes made to
+        ModelBundle never reach a re-exported bundle. Default True.
 
     Returns
     -------
@@ -330,5 +456,30 @@ def reexport_model(old_path: str, new_path: str) -> ModelBundle:
     '''
     with open(old_path, 'rb') as f:
         bundle = pickle.load(f)
+
+    if refresh_class and type(bundle) is not ModelBundle:
+        required = ('config', 'le', 'runtime', '_ensemble', '_sex',
+                    '_feature_names', '_process_source')
+        missing = [a for a in required if not hasattr(bundle, a)]
+        if missing:
+            raise TypeError(
+                'Cannot rebind this bundle to the current ModelBundle: it is '
+                f'missing {missing}. Re-export from the trained ensemble with '
+                'export_model() instead, or pass refresh_class=False.'
+            )
+        member_keys = ('scaler_mean', 'scaler_scale', 'imputer', 'sex_params', 'classifier')
+        missing_keys = [k for k in member_keys if k not in bundle._ensemble[0]]
+        if missing_keys:
+            raise TypeError(
+                'Cannot rebind this bundle to the current ModelBundle: ensemble '
+                f'members are missing {missing_keys}. Pass refresh_class=False.'
+            )
+        bundle.__class__ = ModelBundle
+
+    if inference_mode:
+        bundle.config['inference_mode'] = True
+        bundle._process_source = inspect.getsource(_process_file)
+        bundle._process_ns = None   # invalidate the cached exec namespace
+
     save_model(bundle, new_path)
     return bundle

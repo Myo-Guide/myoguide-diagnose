@@ -99,3 +99,8 @@ Wether to rescale the fat scores or not. If ``Null``, no rescaling is applied. I
 
 .. TODO: Add a section explaining the expected data format better
 .. warning:: to scale the scores, mgdiagnose expects to find a column named ``scale`` labelling the scale used for each sample.
+
+missing_matrix
+^^^^^^^^^^^^^^
+
+Optional bool, ``False`` by default. If ``True``, every feature column (muscle scores and any non-muscle feature such as age or sex) is replaced by ``1`` if available or ``0`` if missing, after all rows have been filtered. Columns listed in ``non_train_cols`` are left out (See :func:`mgdiagnose.process.process.missing_matrix`). Used to measure how much the missingness pattern alone reveals about the class. Requires ``asymmetry: False`` and ``scale_mean: null``.

@@ -155,6 +155,18 @@ def validate_config(config: dict) -> None:
             f'got: {sm!r}'
         )
 
+    # --- inference_mode (optional) --------------------------------------------
+    if 'inference_mode' in config and not isinstance(config['inference_mode'], bool):
+        _err(f'`inference_mode` must be a boolean, got: {config["inference_mode"]!r}')
+
+    # --- missing_matrix (optional) --------------------------------------------
+    mm = config.get('missing_matrix', False)
+    if not isinstance(mm, bool):
+        _err(f'`missing_matrix` must be a boolean, got: {mm!r}')
+    if mm and (config['asymmetry'] or sm is not None):
+        _err('`missing_matrix` requires `asymmetry: False` and `scale_mean: null`, '
+             'otherwise fat-derived features (asymmetry, mean, std) leak into the model')
+
 
 
 def load_config(config_file):

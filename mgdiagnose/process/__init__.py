@@ -14,6 +14,7 @@ from mgdiagnose.process.process import (
     scale_median,
     filter_status,
     prepare_data,
+    missing_matrix,
 )
 
 __all__ = [
@@ -32,4 +33,5 @@ __all__ = [
     'scale_median',
     'filter_status',
     'prepare_data',
+    'missing_matrix',
 ]

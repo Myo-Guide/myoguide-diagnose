@@ -90,8 +90,19 @@ def get_top_percentile_candidates(search, percentile=90):
     results = pd.DataFrame(search.cv_results_)
     last_iter = results['iter'].max()
     last_iter_results = results[results['iter'] == last_iter].copy()
-    threshold = np.percentile(last_iter_results['mean_test_score'], percentile)
-    top = last_iter_results[last_iter_results['mean_test_score'] >= threshold]
+    # A candidate whose fits failed scores NaN (e.g. SMOTE hitting a class with
+    # fewer samples than k_neighbors in a subsampled inner fold). np.percentile
+    # propagates NaN, so without dropping these a single failed fit would make
+    # the threshold NaN and select no candidate at all.
+    scored = last_iter_results.dropna(subset=['mean_test_score'])
+    if scored.empty:
+        raise ValueError(
+            f'No candidate in halving iteration {last_iter} produced a valid score: '
+            f'all {len(last_iter_results)} fits failed. Re-run with error_score="raise" '
+            f'in HalvingRandomSearchCV to see the underlying error.'
+        )
+    threshold = np.percentile(scored['mean_test_score'], percentile)
+    top = scored[scored['mean_test_score'] >= threshold]
     return top['params'].tolist(), top['mean_test_score'].tolist()
 
 
